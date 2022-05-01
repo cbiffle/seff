@@ -1,0 +1,28 @@
+# SEFF - Simple Embeddable Font Format
+
+This crate is designed to allow decent text rendering in resource-constrained
+environments like microcontrollers.
+
+Feature summary:
+
+- Proportional (variable-width) fonts in addition to monospaced (terminal)
+  fonts.
+- Fonts can include kerning information.
+- Aggressively optimized font data structures are cheap to store and relatively
+  cheap to render.
+- Build-time code generation takes fonts in an easily editable PNG format and
+  produces Rust code, if you don't want to paste the code in directly.
+- When built in render-only mode, has no dependencies. In particular, does not
+  depend on any particular embedded HAL.
+
+Drawbacks:
+
+- The Unicode support is very weak; the library currently works best for 8-bit
+  text encodings.
+- Does not support fonts containing more than 256 glyphs. (I plan to have a
+  fallback mechanism for combining fonts if you need this.)
+- Does not support RTL or vertical text directions. (Mostly due to my own lack
+  of understanding of the subtleties.)
+- Does not support text scaling or vector fonts. Each font has a fixed size,
+  chosen at build time. (This one's deliberate; we can store font data more
+  compactly if we know the required size up-front.)
