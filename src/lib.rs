@@ -21,10 +21,11 @@ pub struct Font<'g, 'i, 'k> {
     pub line_spacing: u8,
     /// Glyphs in the font.
     pub glyph_storage: GlyphStorage<'g>,
-    /// Glyph to be used to render any codepoint missing from the glyph storage.
+    /// Index of glyph to use as a replacement for rendering characters whose
+    /// glyphs are missing in this font.
     ///
-    /// This may alias glyph storage.
-    pub replacement: &'g Glyph,
+    /// Note that glyph indexes are glyph-storage specific.
+    pub replacement: u8,
     /// Bitmap storage for all glyphs. Individual glyphs reference ranges in
     /// this slice.
     pub bitmaps: &'i [u8],
@@ -33,12 +34,20 @@ pub struct Font<'g, 'i, 'k> {
 }
 
 impl Font<'_, '_, '_> {
+    /// Looks up the glyph for `c`, or the replacement glyph if `c` is not
+    /// present in this font.
+    pub fn get_glyph_or_replacement(&self, c: char) -> &Glyph {
+        self.glyph_storage.get(c).unwrap_or_else(|| {
+            self.glyph_storage.get_by_index(usize::from(self.replacement))
+                .unwrap()
+        })
+    }
+
     /// Computes the width, in pixels, of the char `c` rendered in this font.
     /// Note that this ignores kerning, so looping over the chars in a string
     /// will not get you the correct result (see `width`).
     pub fn char_width(&self, c: char) -> usize {
-        let glyph = self.glyph_storage.get(c).unwrap_or(&self.replacement);
-        usize::from(glyph.advance)
+        usize::from(self.get_glyph_or_replacement(c).advance)
     }
 
     pub fn width(&self, s: &str) -> usize {
@@ -63,10 +72,9 @@ impl Font<'_, '_, '_> {
                 }
             }
 
-            // Add the default advance of either the specific glyph for this
-            // character, or the replacement glyph.
-            let glyph = self.glyph_storage.get(c).unwrap_or(&self.replacement);
-            x = x.saturating_add(usize::from(glyph.advance));
+            // Add the default advance; if kerning applies we'll handle it next
+            // iteration.
+            x = x.saturating_add(self.char_width(c));
         }
         x
     }
@@ -94,7 +102,7 @@ impl Font<'_, '_, '_> {
                 }
             }
 
-            let glyph = self.glyph_storage.get(c).unwrap_or(self.replacement);
+            let glyph = self.get_glyph_or_replacement(c);
             let gx = pen_x + u32::from(glyph.origin.0);
             let gy = y + u32::from(glyph.origin.1);
 
@@ -146,7 +154,7 @@ impl Font<'_, '_, '_> {
                 }
             }
 
-            let glyph = self.glyph_storage.get(c).unwrap_or(self.replacement);
+            let glyph = self.get_glyph_or_replacement(c);
             let gx = pen_x + u32::from(glyph.origin.0);
             let gy = y + u32::from(glyph.origin.1);
 
@@ -210,6 +218,14 @@ impl GlyphStorage<'_> {
             Self::Dense { first, glyphs } => {
                 let i = u32::from(c).wrapping_sub(u32::from(*first)) as usize;
                 glyphs.get(i)
+            },
+        }
+    }
+
+    pub fn get_by_index(&self, index: usize) -> Option<&Glyph> {
+        match self {
+            Self::Dense { glyphs, .. } => {
+                glyphs.get(index)
             },
         }
     }

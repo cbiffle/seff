@@ -220,7 +220,7 @@ pub fn load_font_from_png<R>(
         descent: u8::try_from(max_descent).unwrap(),
         line_spacing: u8::try_from(max_ascent + max_descent).unwrap(),
         glyph_storage,
-        replacement: &out_glyphs[0],
+        replacement: 0,
         bitmaps: &out_bitmap,
         kerning,
     };

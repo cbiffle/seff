@@ -6,12 +6,6 @@ pub fn generate_rust_module(
     font: &Font<'_, '_, '_>,
     mut out: impl Write,
 ) -> io::Result<()> {
-    let replacement_index = match font.glyph_storage {
-        GlyphStorage::Dense { glyphs, .. } => {
-            glyphs.iter().position(|g| g == font.replacement)
-        },
-    };
-
     writeln!(out, "use seff::*;")?;
     writeln!(out, "pub static FONT: Font = Font {{")?;
     writeln!(out, "    ascent: {},", font.ascent)?;
@@ -26,11 +20,7 @@ pub fn generate_rust_module(
             writeln!(out, "    }},")?;
         }
     }
-    if let Some(ri) = replacement_index {
-        writeln!(out, "    replacement: &GLYPHS[{}],", ri)?;
-    } else {
-        writeln!(out, "    replacement: &REPLACEMENT,")?;
-    }
+    writeln!(out, "    replacement: {},", font.replacement)?;
     writeln!(out, "    bitmaps: &BITMAPS,")?;
     writeln!(out, "    kerning: KerningTable {{ entries: &KERNING_ENTRIES }},")?;
     writeln!(out, "}};")?;
@@ -71,23 +61,6 @@ pub fn generate_rust_module(
             }
             writeln!(out, "];")?;
         }
-    }
-
-    if replacement_index.is_none() {
-        let Glyph {
-            row_bytes,
-            image_offset,
-            image_height,
-            origin,
-            advance,
-        } = font.replacement;
-        writeln!(out, "pub static REPLACEMENT: Glyph {{")?;
-        writeln!(out, "    row_bytes: {row_bytes},")?;
-        writeln!(out, "    image_offset: {image_offset},")?;
-        writeln!(out, "    image_height: {image_height},")?;
-        writeln!(out, "    origin: {origin:?},")?;
-        writeln!(out, "    advance: {advance},")?;
-        writeln!(out, "}};")?;
     }
 
     writeln!(out, "pub static KERNING_ENTRIES: [KerningEntry; {}] = [",
