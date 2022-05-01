@@ -1,0 +1,14 @@
+[package]
+name = "seff"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+std = ["clap", "ron", "image", "aho-corasick"]
+
+[dependencies]
+clap = {version = "3", features = ["derive"], optional = true}
+ron = {version = "0.7", optional = true}
+serde = {version = "1", default-features = false}
+image = {version = "0.24", optional = true}
+aho-corasick = {version = "0.7", optional = true}

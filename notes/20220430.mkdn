@@ -1,0 +1,265 @@
+I would like to have nicer fonts in my embedded projects, and I have thoughts on
+this.
+
+I've decided to support proportional fonts, perhaps with kerning, because I'm
+tired of people not being wowed by my text rendering. Not currently intending to
+do antialiasing; pixels are small now.
+
+- Define one or more formats for conveniently defining glyphs, like in a PNG.
+- Maybe write a truetype importer
+- Definitely write a fixed-cell monospace bitmapped font importer, since that's
+  a degenerate case.
+
+---
+
+The on-device font representation I'm imagining is a combination of fancy
+features and space saving. I'm targeting bilevel / bitmap fonts, specifically.
+Yes, I know emojis are a thing. Not here.
+
+Unlike my previous projects I am _not_ specifically trying to design a font
+representation that can be efficiently streamed in realtime. This is for drawing
+into framebuffers.
+
+Out of scope:
+
+- RTL / vertical text.
+- Ligatures.
+
+
+So, thoughts on representation.
+
+I will use the term "font" in its strict sense as a particular realization of a
+typeface, at a certain size and with a certain set of attributes/parameters.
+
+So, a _font_ is a data structure containing some metadata and some _glyphs._
+
+A given font has fixed _line metrics_ that apply across all glyphs in the font.
+These are:
+
+- Ascender height: number of pixels above the baseline.
+- Descender height: number of pixels below the baseline. (Note that ascender +
+  descender = rendered line height.)
+- Line spacing: number of pixels between the descent of one line and the ascent
+  of the next. May be zero. Could even be negative!
+
+A _glyph_ is a small rectangular bitmapped image, with some metadata attached to
+make it make sense with respect to the rest of the font:
+
+- Image width and height. The height should be no larger than the rendered line
+  height (ascender + descender). The width can be arbitrary.
+- Render origin vector. This gives (X, Y) offset from the _top left_ of the
+  glyph's area -- that is, the point given by the advance of the previous glyph
+  (or start of line) in X, and the top of the ascender height in Y -- to the
+  top-left pixel of the glyph's rendered image.
+- Advance width. This gives the number of horizontal pixels to displace the
+  origin of the next glyph, relative to this glyph's origin.
+
+The glyph image is explicitly allowed to be _smaller_ than the physical area of
+screen assigned to its glyph, to reduce storage cost for mostly empty glyphs
+like period. The origin vector lets us place a smaller glyph image within the
+bounding box determined by the font metrics and the advance width.
+
+The origin vector is measured from the top-left so that it can be unsigned.
+
+Note also that the glyph can extend to the right of the advance width. I dunno
+if I actually _need_ this, but, there it is. Maybe for italics. The glyph
+_cannot_ extend to the left, because the origin vector is unsigned.
+
+
+Finally, a font might contain a _kerning table_ to implement a very simple form
+of kerning adjustment. Normally, the spacing from one glyph to the next is
+determined entirely by the first glyph's advance width. The kerning table allows
+the advance width to be adjusted for a particular _pair_ of glyphs.
+
+Each entry in the kerning table contains
+
+- Identifier of the left glyph.
+- Identifier of the right glyph.
+- Adjustment to the right glyph's horizontal origin, in signed pixels.
+
+So, a kerning table entry lets a pair of glyphs be moved closer together
+(negative adjustment) or farther apart (positive adjustment).
+
+I expect kerning tables to be _sparse_ (most glyphs should use their default
+advance width) and sorted for efficient access. (Though I might also consider a
+perfect hashing scheme to improve locality vs a binary search.)
+
+
+Concretely, here is one embodiment:
+
+```rust
+// 5 words = 20 bytes
+struct Font<'g, 'i, 'k> {
+    /// Ascent height above the baseline in pixels.
+    ascent: u8,
+    /// Descent height below the baseline in pixels.
+    descent: u8,
+    /// Padding between one line's descent and next line's ascent.
+    line_spacing: i8,
+    /// Table of glyphs in index order.
+    glyphs: &'g [Glyph<'i>],
+    /// Kerning adjustments, in sorted order.
+    kerning: &'k [KerningEntry],
+}
+
+// 3 words = 12 bytes
+struct Glyph<'i> {
+    /// Width of bitmap image in units of 8 pixels, i.e. bytes per line.
+    image_width: u8,
+    /// Bitmap image. Height implicitly derived as the number of
+    /// `image_width`-byte chunks.
+    image: &'i [u8],
+    /// Displacement for top-left of rendered image from the top-left of this
+    glyph's bounding box.
+    origin: (u8, u8),
+    /// Default distance from the left side of this glyph's bounding box to the
+    /// left side of the next.
+    advance_width: u8,
+}
+
+// 3 bytes
+struct KerningEntry {
+    /// When a glyph with this index is rendered...
+    before: u8,
+    /// ...followed by a glyph with this index...
+    after: u8,
+    /// ...adjust the space between them by this amount.
+    adjust: i8,
+}
+```
+
+Here the overhead is:
+
+- 20 bytes per font.
+- 12 bytes per glyph.
+- Plus glyph image data
+
+Glyph image data is padded to the nearest byte, which wastes space, but my
+existing representations already wind up doing this so it doesn't waste any
+_new_ space.
+
+Glyphs can omit scanlines at the top or bottom as needed by exploiting the
+origin vector and glyph height; this should reduce storage cost for the glyph
+data itself.
+
+---
+
+Missing from the presentation above is any sense of how to determine glyph index
+from a text encoding.
+
+Text encodings present two obvious choices:
+
+- 8-bit ASCII plus some extension characters
+- Unicode, normally represented as UTF-8.
+
+For 8-bit ASCII, a font could assign glyph indices to a subset of the 8-bit
+space by having a slice of up to 256 glyphs plus an offset for the first. (This
+is to skip the control characters.)
+
+For Unicode, we kind of need lookup tables, because it's going to be sparse.
+(And/or, we detect ASCII-subset fonts and special case them.)
+
+---
+
+Okay, for a representation similar to the one I proposed above, and variations
+upon it, I've written an analysis algorithm that estimates font sizes so I can
+compare them to the naive representation as a dense bitmap.
+
+- variation 1 is above
+- variation 2 assumes that glyphs are in a single concatenated byte array, and
+  uses u16 index + u8 length to slice them instead of pointer+usize actual
+  slices.
+
+Fonts used mostly obtained from https://github.com/idispatch/raster-fonts
+
+```
+                        --- variation 1 ---         --- variation 2 ---
+        naive   glyphs  tables  bitmap  total       tables  bitmap  total
+4x6     1530    255     3088    1128    4216 (275%) 1813    1128    2941 (192%)
+6x8     2048    256     3100    1545    4645 (226%) 1820    1545    3365 (164%)
+8x8     2048    256     3100    1600    4700 (229%) 1820    1600    3420 (166%)
+8x12    1140    95      1168    732     1900 (166%) 693     732     1425 (125%)
+9x8     4096    256     3100    1692    4792 (116%) 1820    1692    3512 (85%)
+9x16    8192    256     3100    2915    6015 (73%)  1820    2915    4735 (57%)
+10x20   10240   256     3100    3877    6977 (68%)  1820    3877    5697 (55%)
+12x24   12288   256     3100    6721    9821 (79%)  1820    6721    8541 (69%)
+16x32   16320   255     3088    9242    12330 (75%) 1813    9242    11055 (67%)
+16x37   18944   256     3100    12845   15945 (84%) 1820    12845   14665 (77%)
+25x57   58368   256     3100    31559   34659 (59%) 1820    31559   33379 (57%)
+
+alll    135214                          106000 (78%)                92735 (68%)
+                                        (-29214)                    (-42479)
+```
+
+The most clear inflection point there appears as the font width passes 8 pixels.
+Because each glyph can have a different width in this representation, I had the
+program left-top justify glyphs into the smallest bounding box, which saved a
+lot of bitmap space in every case (compare the naive number to the bitmap
+number) -- but being able to represent a lot of glyphs using 8 columns instead
+of 16 made a large impact on the 9-16 pixel fonts.
+
+Except 9x8. I think this is because the 9x8 font, being really squished, tends
+to use its entire bounding box.
+
+---
+
+Things I could do to make monospaced fonts cheaper.
+
+Well, the following pieces of information that I'm storing are irrelevant for
+monospaced fonts:
+
+- The kerning table: 8 bytes per font.
+- Per-glyph advance data: 1 byte per glyph, though removing it would also let me
+  lose a byte of padding, afaict, so, 2 bytes per glyph
+
+In exchange we'd need type info at the font level indicating whether to look for
+these optional bits, at a likely cost of ~1 word per font.
+
+The two-bytes-per-glyph part knocks between 200 and 512 bytes off a typical
+font, which is nice.
+
+I guess this comes down to how many monospaced vs. proportional fonts I expect.
+I have no intuition there.
+
+---
+
+I'd like to support basic Unicode, but, it would inflate the kerning tables,
+among other things.
+
+---
+
+If I have a representation that allows for efficient sparse fonts -- perfect
+hashing seems like the obvious choice -- then I could combine that with font
+fallback to provide common reservoirs of special characters. Fonts could either
+have a static fallback pointer, or you could configure a fallback order in the
+renderer. (I think static makes more sense considering my use case.)
+
+This is nice because it means things like graphic symbols don't have to be
+duplicated among fonts of the same vertical metrics.
+
+---
+
+Ok, working out how to lay out proportional fonts in images for ease of editing.
+The scheme I'm currently looking at is...
+
+- White is background.
+- Black is set pixels
+- The image is separated into bands. Each band is divided by a one-pixel strip
+  of red, which must start at the left margin.
+- Inside each band, there's a one-pixel blue strip indicating the baseline.
+- Break the baseline with one or more red pixels to separate characters.
+
+To load the image...
+
+1. Scan the left margin to find the red points.
+2. Check that they're evenly spaced. Each band should be the same size.
+3. Within each band,
+    - Follow the red to the right to find its length.
+    - Find all the blue pixels. They should all be at the same Y coordinate.
+      This is the first pixel above the baseline.
+    - Start scanning the blue line from the left, collecting character bounding
+      boxes until it hits red. Skip red.
+4. See that all the bands have compatible metrics.
+5. Compress all the glyphs using my existing method.
+
+

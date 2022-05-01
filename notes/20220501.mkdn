@@ -1,0 +1,53 @@
+I have written a set of conversion tools for working with fonts as PNGs, and I
+can now provide more precise size estimates.
+
+I have also implemented a scavenging algorithm, which attempts to reuse bitmap
+fragments across glyphs. Since we're using indexes into a shared bitmap array,
+doing this has _zero cost at runtime_ and is relatively simple at build time.
+
+First, the console fonts I studied yesterday. The "no reuse" number is without
+bitmap scavenging, "processed" is my current best, and "scavenged" gives the
+savings from scavenging.
+
+```
+        naive   glyphs     no reuse     processed       scavenged
+4x6     1530    255        3200         2934 (192%)     266 (8%)
+6x8     2048    256        3625         3525 (172%)     100 (3%)
+8x8     2048    256        3680         3566 (174%)     114 (3%)
+8x12    1140    95         1524         1507 (132%)     17 (1%)
+9x8     4096    256        3772         3652 (89%)      120 (3%)
+9x16    8192    256        4995         4824 (59%)      171 (3%)
+10x20   10240   256        5957         5737 (56%)      220 (4%)
+12x24   12288   256        8801         8455 (69%)      346 (4%)
+16x32   16320   255        11314        10868 (67%)     446 (4%)
+16x37   18944   256        14925        11605 (61%)     3320 (2%)
+25x57   58368   256        33638        32064 (55%)     1574 (5%)
+
+all     135214                          88736 (66%)
+                                        (-46478)
+```
+
+So, if I wanted to include all those fonts in an image, I would save 66%
+compared to the naive representation. Scavenging saves about 3-4% on average.
+
+Scavenging is more effective on the 4x6 font, likely because it simply contains
+a lot fewer possible variations of row data (there are only 16 possible rows)
+and the characters are nigh-inscrutable. I was kind of shocked to see it working
+well on the 25x57 font, where I expected the higher entropy per glyph to break
+it. And yet.
+
+Here is a list of the reuse discoveries in the 25x57 case:
+
+- Underscore: made from a slice of the happyface at codepoint 1 (28 bytes)
+- Many of the box drawing characters can be defined in terms of one another.
+  (Rest.)
+
+
+I've also converted a Futura-ish proportional font at 28 pixels line height. The
+closest monospaced font (in terms of both line height and detail) is the 16x32
+font; Futura takes 3551 bytes for 95 glyphs. The 16x32 font would be aboooooout
+4048 bytes for 95 glyphs. So, that suggests that proportional fonts are indeed
+cheaper to store due to their generally narrower glyphs.
+
+
+What I _don't_ currently have is rendering code. Let me fix that.
