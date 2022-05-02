@@ -19,6 +19,11 @@ pub fn generate_rust_module(
             writeln!(out, "        glyphs: &GLYPHS,")?;
             writeln!(out, "    }},")?;
         }
+        GlyphStorage::Sparse { .. } => {
+            writeln!(out, "GlyphStorage::Sparse {{")?;
+            writeln!(out, "        sorted_glyphs: &SORTED_GLYPHS,")?;
+            writeln!(out, "    }},")?;
+        }
     }
     writeln!(out, "    replacement: {},", font.replacement)?;
     writeln!(out, "    bitmaps: &BITMAPS,")?;
@@ -36,7 +41,7 @@ pub fn generate_rust_module(
                     origin,
                     advance,
                 } = g;
-                writeln!(out, "    // index {}: '{}'", i, char::from_u32(u32::from(first) + i as u32).unwrap_or('?'))?;
+                writeln!(out, "    // index {}: {:?}", i, char::from_u32(u32::from(first) + i as u32).unwrap_or('?'))?;
                 if *row_bytes != 0 {
                     let chunk = &font.bitmaps[usize::from(*image_offset)..usize::from(*image_offset) + usize::from(*row_bytes) * usize::from(*image_height)];
                     for row in chunk.chunks(usize::from(*row_bytes)) {
@@ -58,6 +63,41 @@ pub fn generate_rust_module(
                 writeln!(out, "        origin: {origin:?},")?;
                 writeln!(out, "        advance: {advance},")?;
                 writeln!(out, "    }},")?;
+            }
+            writeln!(out, "];")?;
+        }
+        GlyphStorage::Sparse { sorted_glyphs } => {
+            writeln!(out, "pub static SORTED_GLYPHS: [(char, Glyph); {}] = [", sorted_glyphs.len())?;
+            for (i, (glyph_char, glyph)) in sorted_glyphs.iter().enumerate() {
+                let Glyph {
+                    row_bytes,
+                    image_offset,
+                    image_height,
+                    origin,
+                    advance,
+                } = glyph;
+                writeln!(out, "    // index {}: {:?}", i, glyph_char)?;
+                if *row_bytes != 0 {
+                    let chunk = &font.bitmaps[usize::from(*image_offset)..usize::from(*image_offset) + usize::from(*row_bytes) * usize::from(*image_height)];
+                    for row in chunk.chunks(usize::from(*row_bytes)) {
+                        write!(out, "    // |")?;
+                        for byte in row {
+                            let mut byte = *byte;
+                            for _ in 0..8 {
+                                write!(out, "{}", if byte & 0x80 != 0 { '*' } else { ' ' })?;
+                                byte <<= 1;
+                            }
+                        }
+                        writeln!(out, "|")?;
+                    }
+                }
+                writeln!(out, "    ({:?}, Glyph {{", glyph_char)?;
+                writeln!(out, "        row_bytes: {row_bytes},")?;
+                writeln!(out, "        image_offset: {image_offset},")?;
+                writeln!(out, "        image_height: {image_height},")?;
+                writeln!(out, "        origin: {origin:?},")?;
+                writeln!(out, "        advance: {advance},")?;
+                writeln!(out, "    }}),")?;
             }
             writeln!(out, "];")?;
         }

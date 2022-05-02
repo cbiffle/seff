@@ -240,6 +240,11 @@ pub enum GlyphStorage<'g> {
         /// In practice, this should be no longer than `256 - first` entries.
         glyphs: &'g [Glyph],
     },
+    /// The font provides a set of glyphs for an arbitrary set of Unicode
+    /// codepoints, stored in sorted order so they can be binary searched.
+    Sparse {
+        sorted_glyphs: &'g [(char, Glyph)],
+    },
 }
 
 impl GlyphStorage<'_> {
@@ -251,6 +256,11 @@ impl GlyphStorage<'_> {
                 let i = u32::from(c).wrapping_sub(u32::from(*first)) as usize;
                 glyphs.get(i)
             },
+            Self::Sparse { sorted_glyphs } => {
+                sorted_glyphs.binary_search_by_key(&c, |(cp, _)| *cp)
+                    .ok()
+                    .map(|i| &sorted_glyphs[i].1)
+            },
         }
     }
 
@@ -260,6 +270,9 @@ impl GlyphStorage<'_> {
         match self {
             Self::Dense { glyphs, .. } => {
                 glyphs.get(index)
+            },
+            Self::Sparse { sorted_glyphs, .. } => {
+                sorted_glyphs.get(index).map(|(_, g)| g)
             },
         }
     }

@@ -4,6 +4,8 @@ use clap::Parser;
 struct Img {
     #[clap(long)]
     first: Option<u8>,
+    #[clap(arg_enum, short, long)]
+    charset: Option<seff::load::GlyphOrder>,
     input: std::path::PathBuf,
 }
 
@@ -13,7 +15,9 @@ fn main() {
     let input = std::fs::File::open(args.input).unwrap();
     let input = std::io::BufReader::new(input);
 
-    seff::load::load_font_from_png(input, args.first, |font| {
+    let order = args.charset.unwrap_or(seff::load::GlyphOrder::Iso8859_1);
+
+    seff::load::load_font_from_png(input, order, args.first, |font| {
         seff::gen::generate_rust_module(&font, std::io::stdout())?;
         Ok(())
     }).unwrap();

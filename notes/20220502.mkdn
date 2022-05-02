@@ -1,0 +1,23 @@
+# More Better Unicode
+
+Adding a Sparse glyph storage option and _not using it_ costs 28 bytes in my Wio
+Terminal demo. There's a delta of 30 bytes of code in main, two bytes of which
+slots into former padding.
+
+Interestingly the font data structure doesn't get _represented_ anywhere, as far
+as I can tell, so this might be an underestimate based on inlining.
+
+
+Another thing to examine is switching the representation of an existing font
+between dense and sparse. Let's pick the IBM 8x8 VGA font, arbitrarily.
+
+Overall program size, dense rep: 5556
+Sparse rep: 5952
+Delta: 396 bytes, or 4 1/8 bytes per glyph. hmmm because the char will have
+forced an alignment increase.
+
+Still, that's about what I'd expect.
+
+The current implementation now lets me load CP437 fonts and map them into actual
+Unicode, which will make string literals using graphical characters _much_
+clearer.

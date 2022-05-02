@@ -68,3 +68,28 @@ Adding font rendering for a short Walt Whitman quote has the following impact:
 ...for a total delta of 5060 bytes.
 
 
+---
+
+
+A lot of the public domain fonts are PC codepage fonts that put a bunch of fancy
+glyphs in the control character positions, etc. I'd like to support such symbols
+but I'd sure like to do it properly. Which brings me to: sparse Unicode support.
+
+Currently thinking:
+
+- Provide a way to indicate the Unicode codepoint of a given glyph in the PNG
+  format. (If not overridden, the codepoint would keep incrementing by 1.) The
+  most likely way of doing this, while gross, is a color-encoded binary number
+  in the column above the _terminating_ red pixels on the baseline.
+
+- Provide a new GlyphStorage option using binary search.
+    - This will require storing the codepoint in the glyph at a cost of 4 bytes
+      per glyph.
+    - I tried using perfect hashing for this but I had a hard time getting the
+      storage space low enough.
+
+Instead of arbitrary per-glyph assignments I could also provide a way to
+indicate an existing unicode mapping or codepage. That'd cover a lot of the
+older fonts available online (e.g. CP437).
+
+
