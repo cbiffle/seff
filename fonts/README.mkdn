@@ -1,0 +1,7 @@
+# SEFF example fonts
+
+Here are some fonts in the PNG format used by `seff::load::load_from_png`. They
+are in the public domain.
+
+- `ibm-8x8`: IBM public domain VGA font (monospaced)
+- `futuroid-24`: my crappy version of Futura at about 24 pt (proportional)
