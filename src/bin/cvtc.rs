@@ -13,6 +13,13 @@ struct Cvtc {
     ascent: Option<usize>,
     #[clap(long, default_value = "16")]
     per_band: usize,
+    #[clap(long)]
+    flip_y: bool,
+    #[clap(long)]
+    flip_x: bool,
+    #[clap(long)]
+    add_advance: Option<usize>,
+
     input: std::path::PathBuf,
     output: std::path::PathBuf,
 }
@@ -25,11 +32,21 @@ fn main() {
     ).unwrap();
     let bytes_per_row = (args.width + 7) / 8;
     for row in &mut font_data {
-        *row <<= 8 * (4 - bytes_per_row);
+        if args.flip_x {
+            *row = row.reverse_bits();
+        } else {
+            *row <<= 8 * (4 - bytes_per_row);
+        }
     }
 
     let glyph_data: Vec<Vec<_>> = font_data.chunks_exact(args.height)
-        .map(|chunk| chunk.iter().cloned().collect())
+        .map(|chunk| {
+            if args.flip_y {
+                chunk.iter().rev().cloned().collect()
+            } else {
+                chunk.iter().cloned().collect()
+            }
+        })
         .collect();
 
     println!("Loaded {} glyphs / {} bytes.", glyph_data.len(), font_data.len() * bytes_per_row);
@@ -62,7 +79,9 @@ fn main() {
 
     println!("Line height: {}; ascent = {}, descent = {}", args.height, ascent, args.height - ascent);
 
-    let img_width = u32::try_from((args.width + 1) * args.per_band).unwrap();
+    let cell_width = args.width + args.add_advance.unwrap_or(0);
+
+    let img_width = u32::try_from((cell_width + 1) * args.per_band).unwrap();
     let n_bands = (glyph_data.len() + (args.per_band - 1)) / args.per_band;
     let band_height = args.height + 1;
     let img_height = u32::try_from(band_height * n_bands).unwrap();
@@ -87,11 +106,11 @@ fn main() {
     for (i, data) in glyph_data.iter().enumerate() {
         let band = i / args.per_band;
         let gy = u32::try_from(band_height * band).unwrap();
-        let gx = u32::try_from((i % args.per_band) * (args.width + 1)).unwrap();
+        let gx = u32::try_from((i % args.per_band) * (cell_width + 1)).unwrap();
 
         // Baseline glyph separator
-        img.put_pixel(gx + args.width as u32, gy + ascent as u32 - 1, Rgb([0xFF, 0, 0]));
-        img.put_pixel(gx + args.width as u32, gy + ascent as u32 - 2, Rgb([0xFF, 0, 0]));
+        img.put_pixel(gx + cell_width as u32, gy + ascent as u32 - 1, Rgb([0xFF, 0, 0]));
+        img.put_pixel(gx + cell_width as u32, gy + ascent as u32 - 2, Rgb([0xFF, 0, 0]));
 
         // Draw glyph
         for (row_i, row) in data.iter().enumerate() {

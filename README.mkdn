@@ -15,7 +15,7 @@ Feature summary:
 - When built in render-only mode, has no dependencies. In particular, does not
   depend on any particular embedded HAL.
 
-Drawbacks:
+Drawbacks/limitations:
 
 - The Unicode support is very weak; the library currently works best for 8-bit
   text encodings.

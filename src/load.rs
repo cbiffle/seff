@@ -203,8 +203,9 @@ pub fn load_font_from_png<R>(
             [0, 32] => 0,
             [x, y] if *y == *x + 223 => 32,
             [0, 32, 255] => 0,
+            [0, 95] => 32,
             _ => {
-                panic!("can't detect font offset due to ambiguous blank pattern");
+                panic!("can't detect font offset due to ambiguous blank pattern: {:?}", blanks);
             }
         }
     };

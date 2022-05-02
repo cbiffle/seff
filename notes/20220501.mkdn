@@ -51,3 +51,20 @@ cheaper to store due to their generally narrower glyphs.
 
 
 What I _don't_ currently have is rendering code. Let me fix that.
+
+---
+
+Rendering implemented, and wired into one of my demos (the Wio Terminal one).
+Adding font rendering for a short Walt Whitman quote has the following impact:
+
+- About 1382 bytes for the font library
+- Plus a couple small stdlib things that have gotten pulled in because the demo
+  was quite minimal before -- specifically, hooks for slice bounds check failure
+  -- 20 bytes total.
+- The font itself, in rodata, at 3552 bytes. (It's my Futura knockoff at about
+  24pt.)
+- The string being printed, at 104 bytes.
+
+...for a total delta of 5060 bytes.
+
+
