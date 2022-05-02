@@ -33,7 +33,23 @@ pub struct Font<'g, 'i, 'k> {
     pub kerning: KerningTable<'k>,
 }
 
-impl Font<'_, '_, '_> {
+impl<'k> Font<'_, '_, 'k> {
+    /// Given the Y coordinate of the desired text baseline, this computes the Y
+    /// of the top of its bounding box, for use with `render`.
+    ///
+    /// This returns an `Option` because we can't currently represent negative Y
+    /// coordinates, so if `baseline` is less than `font.ascent`, there's no
+    /// result.
+    pub fn baseline_to_y(&self, baseline: usize) -> Option<usize> {
+        baseline.checked_sub(usize::from(self.ascent))
+    }
+
+    /// Returns the spacing between lines of text in this font, as a `usize` for
+    /// convenience.
+    pub fn line_spacing_usize(&self) -> usize {
+        usize::from(self.line_spacing)
+    }
+
     /// Looks up the glyph for `c`, or the replacement glyph if `c` is not
     /// present in this font.
     pub fn get_glyph_or_replacement(&self, c: char) -> &Glyph {
@@ -50,27 +66,18 @@ impl Font<'_, '_, '_> {
         usize::from(self.get_glyph_or_replacement(c).advance)
     }
 
+    /// Computes the width, in pixels, of the string `s` rendered in this font.
+    /// This handles kerning but not line breaks; newlines will be rendered
+    /// using whatever glyph is given in the font for `'\n'`.
+    ///
+    /// This happens to be exactly the same logic used by `render`, so you can
+    /// use `width` to work out the dimensions needed for `render`.
     pub fn width(&self, s: &str) -> usize {
-        // To lookup codepoint pairs in the kerning table, we'll keep track of
-        // the previous character here:
-        let mut prev_c = None;
-
         let mut x = 0_usize;
+        let mut kerning = self.start_kerning();
 
         for c in s.chars() {
-            // Record this character as the new previous character. If there was
-            // already a previous character, look for a kerning table entry.
-            if let Some(pc) = prev_c.replace(c) {
-                if let Some(kte) = self.kerning.get(pc, c) {
-                    // We have an entry. Add its adjustment gingerly to avoid
-                    // overflow.
-                    x = if kte.adjust < 0 {
-                        x.saturating_sub(usize::from((-kte.adjust) as u8))
-                    } else {
-                        x.saturating_add(usize::from(kte.adjust as u8))
-                    };
-                }
-            }
+            kerning.adjust_usize_for_char(c, &mut x);
 
             // Add the default advance; if kerning applies we'll handle it next
             // iteration.
@@ -79,117 +86,140 @@ impl Font<'_, '_, '_> {
         x
     }
 
+    /// Renders text on a single line.
+    ///
+    /// The text in `string` will be drawn with its _upper left_ coordinate at
+    /// position `(x, y)` in `target`. Pixels that are set in the font will be
+    /// filled in with color `fg`. Other pixels will be left undisturbed, so the
+    /// text's background will appear transparent.
+    ///
+    /// This handles kerning but not line breaks. Newlines in `string` will be
+    /// drawn with whatever glyph the font specifies for `'\n'`.
+    ///
+    /// Note that the `y` coordinate given to this function is the top of the
+    /// bounding box, _not_ the baseline. Use `baseline_to_y` to compute the
+    /// bounding box coordinate corresponding to a given baseline coordinate.
+    ///
+    /// This implementation tends to be a little more expensive than
+    /// `render_direct`, so if your render target can be made to implement
+    /// `DirectRenderTarget`, consider using that instead.
     pub fn render<T>(
         &self,
         string: &str,
-        x: u32,
-        y: u32,
+        x: usize,
+        y: usize,
         target: &mut T,
         fg: T::Pixel,
     )
         where T: RenderTarget,
     {
-        let mut pen_x = x;
-        let mut last_c = None;
-        for c in string.chars() {
-            if let Some(prev) = last_c.replace(c) {
-                if let Some(entry) = self.kerning.get(prev, c) {
-                    if entry.adjust < 0 {
-                        pen_x = pen_x.saturating_sub((-entry.adjust) as u32);
-                    } else {
-                        pen_x = pen_x.saturating_add(entry.adjust as u32);
-                    }
-                }
-            }
-
-            let glyph = self.get_glyph_or_replacement(c);
-            let gx = pen_x + u32::from(glyph.origin.0);
-            let gy = y + u32::from(glyph.origin.1);
-
-            let data_off = usize::from(glyph.image_offset);
+        self.render_core(string, x, y, |gx, gy, glyph, slice| {
             let height = usize::from(glyph.image_height);
-            let row_bytes = usize::from(glyph.row_bytes);
-            let data_len = row_bytes * height;
+            let row_bytes = glyph.row_bytes_usize();
 
-            if data_len != 0 {
-                let slice = &self.bitmaps[data_off..data_off + data_len];
-                for (y, data) in (gy..gy + height as u32).zip(slice.chunks(row_bytes)) {
-                    let mut x = gx;
-                    for byte in data {
-                        let mut byte = *byte;
-                        for _ in 0..8 {
-                            if byte & 0x80 != 0 {
-                                target.put_pixel_slow(x, y, fg);
-                            }
-                            byte <<= 1;
-                            x += 1;
+            for (y, data) in (gy..gy + height).zip(slice.chunks(row_bytes)) {
+                let mut x = gx;
+                for byte in data {
+                    let mut byte = *byte;
+                    for _ in 0..8 {
+                        if byte & 0x80 != 0 {
+                            target.put_pixel_slow(x, y, fg);
                         }
+                        byte <<= 1;
+                        x += 1;
                     }
                 }
             }
-
-            pen_x += u32::from(glyph.advance);
-        }
+        });
     }
+
+    /// Renders text on a single line, slightly faster.
+    ///
+    /// This behaves just like `render` but uses the `DirectRenderTarget` API,
+    /// which lets us make more assumptions about memory layout and winds up
+    /// being slightly cheaper.
+    ///
+    /// See `render` for more details.
     pub fn render_direct<T>(
         &self,
         string: &str,
-        x: u32,
-        y: u32,
+        x: usize,
+        y: usize,
         target: &mut T,
         fg: T::Pixel,
     )
         where T: DirectRenderTarget,
     {
-        let mut pen_x = x;
-        let mut last_c = None;
-        for c in string.chars() {
-            if let Some(prev) = last_c.replace(c) {
-                if let Some(entry) = self.kerning.get(prev, c) {
-                    if entry.adjust < 0 {
-                        pen_x = pen_x.saturating_sub((-entry.adjust) as u32);
+        self.render_core(string, x, y, |gx, gy, glyph, slice| {
+            let height = usize::from(glyph.image_height);
+            let row_bytes = glyph.row_bytes_usize();
+
+            for (y, data) in (gy..gy + height).zip(slice.chunks(row_bytes)) {
+                let dest =
+                    target.subrow_mut(y, gx..gx + row_bytes * 8);
+                let mut data = data.iter().cloned();
+                let mut byte = 0;
+                let mut bits_left = 0_usize;
+                for pel in dest {
+                    if let Some(n) = bits_left.checked_sub(1) {
+                        bits_left = n;
+                    } else if let Some(b) = data.next() {
+                        byte = b;
+                        bits_left = 7;
                     } else {
-                        pen_x = pen_x.saturating_add(entry.adjust as u32);
+                        break;
                     }
+
+                    if byte & 0x80 != 0 {
+                        *pel = fg;
+                    }
+                    byte <<= 1;
                 }
             }
+        });
+    }
+
+    /// Implementation factor of both `render` and `render_direct`, exposed here
+    /// in case you're doing something unexpected.
+    ///
+    /// This will call `action` with the X, Y coordinates for each non-empty
+    /// glyph rendered from `string`, starting at the given location, as well as
+    /// the font's `Glyph` for the character and the actual slice of bitmap
+    /// data.
+    pub fn render_core(
+        &self,
+        string: &str,
+        x: usize,
+        y: usize,
+        mut action: impl FnMut(usize, usize, &Glyph, &[u8]),
+    ) {
+        let mut pen_x = x;
+        let mut kerning = self.start_kerning();
+        for c in string.chars() {
+            kerning.adjust_usize_for_char(c, &mut pen_x);
 
             let glyph = self.get_glyph_or_replacement(c);
-            let gx = pen_x + u32::from(glyph.origin.0);
-            let gy = y + u32::from(glyph.origin.1);
 
-            let data_off = usize::from(glyph.image_offset);
-            let height = usize::from(glyph.image_height);
-            let row_bytes = usize::from(glyph.row_bytes);
-            let data_len = row_bytes * height;
-
-            if data_len != 0 {
-                let slice = &self.bitmaps[data_off..data_off + data_len];
-                for (y, data) in (gy..gy + height as u32).zip(slice.chunks(row_bytes)) {
-                    let dest =
-                        target.subrow_mut(y, gx..gx + row_bytes as u32 * 8);
-                    let mut data = data.iter().cloned();
-                    let mut byte = 0;
-                    let mut bits_left = 0_u32;
-                    for pel in dest {
-                        if let Some(n) = bits_left.checked_sub(1) {
-                            bits_left = n;
-                        } else if let Some(b) = data.next() {
-                            byte = b;
-                            bits_left = 7;
-                        } else {
-                            break;
-                        }
-
-                        if byte & 0x80 != 0 {
-                            *pel = fg;
-                        }
-                        byte <<= 1;
-                    }
-                }
+            if glyph.has_image() {
+                let (gx, gy) = glyph.displace_usize(pen_x, y);
+                action(
+                    gx,
+                    gy,
+                    glyph,
+                    glyph.slice_bitmap(&self.bitmaps),
+                );
             }
 
-            pen_x += u32::from(glyph.advance);
+            pen_x += glyph.default_advance_usize();
+        }
+    }
+
+    /// Returns a `KerningState` ready to being kerning characters. This is
+    /// appropriate for use at the beginning of a line.
+    pub fn start_kerning(&self) -> KerningState<'k> {
+        KerningState {
+            table: self.kerning,
+            last_char: None,
         }
     }
 }
@@ -213,6 +243,8 @@ pub enum GlyphStorage<'g> {
 }
 
 impl GlyphStorage<'_> {
+    /// Looks up a `char` in glyph storage. Returns `None` if the `char` is not
+    /// explicitly represented in storage.
     pub fn get(&self, c: char) -> Option<&Glyph> {
         match self {
             Self::Dense { first, glyphs } => {
@@ -222,6 +254,8 @@ impl GlyphStorage<'_> {
         }
     }
 
+    /// Looks up a glyph by glyph _index,_ which is mostly only used during
+    /// replacement glyph processing, but maybe you've got ideas.
     pub fn get_by_index(&self, index: usize) -> Option<&Glyph> {
         match self {
             Self::Dense { glyphs, .. } => {
@@ -239,6 +273,7 @@ pub struct Glyph {
     pub row_bytes: u8,
     /// Image data slice position in the font's image data array.
     pub image_offset: u16,
+    /// Number of rows of pixels in this glyph's image.
     pub image_height: u8,
     /// Displacement in (X, Y) from the top-left of the glyph's bounding box to
     /// the top-left pixel in `image`. This allows an image to be smaller than
@@ -248,6 +283,50 @@ pub struct Glyph {
     /// left side of the next glyph. This can be overridden by kerning
     /// information.
     pub advance: u8,
+}
+
+impl Glyph {
+    /// Checks whether this glyph has an image, i.e. is not blank.
+    pub fn has_image(&self) -> bool {
+        self.row_bytes != 0
+    }
+
+    /// Adds this glyph's `origin` to the given X/Y coordinates to produce the
+    /// coordinates of the top left of the glyph's rendered area.
+    pub fn displace_usize(&self, x: usize, y: usize) -> (usize, usize) {
+        (x + usize::from(self.origin.0), y + usize::from(self.origin.1))
+    }
+
+    /// Computes the width in pixels of this glyph's rendered area.
+    pub fn width_in_pixels(&self) -> usize {
+        self.row_bytes_usize() * 8
+    }
+
+    /// Slices this glyph's bitmap out of a shared bitmap slice.
+    ///
+    /// # Panics
+    ///
+    /// If this glyph's offset and size wind up being out of range for `bitmap`,
+    /// which probably means you're attempting to use a `Glyph` from one font
+    /// with a bitmap array from another, or something.
+    pub fn slice_bitmap<'b>(&self, bitmap: &'b [u8]) -> &'b [u8] {
+        let data_off = usize::from(self.image_offset);
+        let height = usize::from(self.image_height);
+        let data_len = self.row_bytes_usize() * height;
+        &bitmap[data_off..data_off + data_len]
+    }
+
+    /// Returns the default horizontal advance for glyphs in this font as a
+    /// `usize`.
+    pub fn default_advance_usize(&self) -> usize {
+        usize::from(self.advance)
+    }
+
+    /// Returns the number of bitmap bytes in a row of this glyph's image, as a
+    /// `usize`.
+    pub fn row_bytes_usize(&self) -> usize {
+        usize::from(self.row_bytes)
+    }
 }
 
 /// A kerning table.
@@ -282,10 +361,38 @@ pub struct KerningEntry {
     pub adjust: i8,
 }
 
+impl KerningEntry {
+    /// Apply the tracking adjustment from this kerning table entry to a
+    /// position represented as a `usize` using saturating arithmetic.
+    #[must_use = "this doesn't adjust in-place"]
+    pub fn adjust_usize(&self, val: usize) -> usize {
+        if self.adjust < 0 {
+            val.saturating_sub(usize::from((-self.adjust) as u8))
+        } else {
+            val.saturating_add(usize::from(self.adjust as u8))
+        }
+    }
+}
+
+pub struct KerningState<'k> {
+    table: KerningTable<'k>,
+    last_char: Option<char>,
+}
+
+impl KerningState<'_> {
+    pub fn adjust_usize_for_char(&mut self, c: char, x: &mut usize) {
+        if let Some(prev) = self.last_char.replace(c) {
+            if let Some(entry) = self.table.get(prev, c) {
+                *x = entry.adjust_usize(*x);
+            }
+        }
+    }
+}
+
 pub trait RenderTarget {
     type Pixel: Copy + 'static;
 
-    fn put_pixel_slow(&mut self, x: u32, y: u32, pixel: Self::Pixel);
+    fn put_pixel_slow(&mut self, x: usize, y: usize, pixel: Self::Pixel);
 }
 
 #[cfg(feature = "std")]
@@ -294,7 +401,9 @@ impl<P, C> RenderTarget for image::ImageBuffer<P, C>
           C: core::ops::Deref<Target = [P::Subpixel]> + core::ops::DerefMut,
 {
     type Pixel = P;
-    fn put_pixel_slow(&mut self, x: u32, y: u32, pixel: P) {
+    fn put_pixel_slow(&mut self, x: usize, y: usize, pixel: P) {
+        let x = u32::try_from(x).unwrap();
+        let y = u32::try_from(y).unwrap();
         if x < self.width() && y < self.height() {
             self.put_pixel(x, y, pixel);
         }
@@ -304,7 +413,7 @@ impl<P, C> RenderTarget for image::ImageBuffer<P, C>
 pub trait DirectRenderTarget {
     type Pixel: Copy + 'static;
 
-    fn subrow_mut(&mut self, y: u32, x: core::ops::Range<u32>) -> &mut [Self::Pixel];
+    fn subrow_mut(&mut self, y: usize, x: core::ops::Range<usize>) -> &mut [Self::Pixel];
 }
 
 #[cfg(feature = "std")]
@@ -314,7 +423,7 @@ impl<P, C> DirectRenderTarget for image::ImageBuffer<image::Luma<P>, C>
 {
     type Pixel = image::Luma<P>;
 
-    fn subrow_mut(&mut self, y: u32, x: core::ops::Range<u32>) -> &mut [Self::Pixel] {
+    fn subrow_mut(&mut self, y: usize, x: core::ops::Range<usize>) -> &mut [Self::Pixel] {
         let flat = self.as_flat_samples_mut();
         let row_i = y as usize * flat.layout.width as usize;
         let row = &mut flat.samples[row_i..row_i + flat.layout.width as usize];
@@ -327,14 +436,5 @@ impl<P, C> DirectRenderTarget for image::ImageBuffer<image::Luma<P>, C>
         unsafe {
             &mut *(subpixels as *mut [P] as *mut [image::Luma<P>])
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
     }
 }

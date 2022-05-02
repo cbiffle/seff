@@ -34,11 +34,14 @@ fn main() {
             } else {
                 (0xFF, Luma([0]))
             };
-            let mut outimg = image::ImageBuffer::<Luma<u8>, _>::new(img_width as u32, font.line_spacing as u32 * line_count as u32);
+            let mut outimg = image::ImageBuffer::<Luma<u8>, _>::new(
+                img_width as u32,
+                (font.line_spacing_usize() * line_count) as u32,
+            );
             outimg.fill(bg);
 
             for (i, line) in args.text.lines().enumerate() {
-                font.render_direct(line, 0, (i * font.line_spacing as usize) as u32, &mut outimg, fg);
+                font.render_direct(line, 0, i * font.line_spacing_usize(), &mut outimg, fg);
             }
 
             outimg.save(args.output)?;
