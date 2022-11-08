@@ -3,14 +3,30 @@ use std::io::{BufRead, Seek};
 use image::Rgb;
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug, clap::ArgEnum)]
-pub enum GlyphOrder {
+pub enum GlyphOrderArg {
     Iso8859_1,
     Cp437,
 }
 
+impl From<GlyphOrderArg> for GlyphOrder<'_> {
+    fn from(a: GlyphOrderArg) -> Self {
+        match a {
+            GlyphOrderArg::Iso8859_1 => Self::Iso8859_1,
+            GlyphOrderArg::Cp437 => Self::Cp437,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+pub enum GlyphOrder<'a> {
+    Iso8859_1,
+    Cp437,
+    Explicit(&'a [char]),
+}
+
 pub fn load_font_from_png<R>(
     png: impl BufRead + Seek,
-    order: GlyphOrder,
+    order: GlyphOrder<'_>,
     first: Option<u8>,
     body: impl FnOnce(&Font<'_, '_, '_>) -> Result<R, Box<dyn std::error::Error>>,
 ) -> Result<R, Box<dyn std::error::Error>> {
@@ -200,7 +216,9 @@ pub fn load_font_from_png<R>(
     }
 
     // Try to detect offset based on blanks.
-    let first = if let Some(f) = first {
+    let first = if let GlyphOrder::Explicit(chars) = order {
+        chars[0] as u8
+    } else if let Some(f) = first {
         f
     } else {
         let blanks: Vec<usize> = out_glyphs.iter().enumerate()
@@ -225,6 +243,11 @@ pub fn load_font_from_png<R>(
         match order {
             GlyphOrder::Iso8859_1 => (),
 
+            GlyphOrder::Explicit(chars) => {
+                for (&g, &c) in out_glyphs.iter().zip(chars) {
+                    table.push((c, g));
+                }
+            }
             GlyphOrder::Cp437 => {
                 for (&g, &c) in out_glyphs.iter().zip(&CP437_CODEPOINTS[first as usize..]) {
                     table.push((c, g));

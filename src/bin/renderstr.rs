@@ -6,7 +6,7 @@ struct RenderStr {
     #[clap(long)]
     first: Option<u8>,
     #[clap(arg_enum, short, long)]
-    charset: Option<seff::load::GlyphOrder>,
+    charset: Option<seff::load::GlyphOrderArg>,
     #[clap(short)]
     invert: bool,
 
@@ -21,11 +21,11 @@ fn main() {
     let font = std::fs::File::open(args.font).unwrap();
     let font = std::io::BufReader::new(font);
 
-    let order = args.charset.unwrap_or(seff::load::GlyphOrder::Iso8859_1);
+    let order = args.charset.unwrap_or(seff::load::GlyphOrderArg::Iso8859_1);
 
     seff::load::load_font_from_png(
         font,
-        order,
+        order.into(),
         args.first,
         |font| {
             let line_count = args.text.lines().count();
